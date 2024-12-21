@@ -1,0 +1,23 @@
+#setting files
+.DS_Store
+.idea/
+.tmp.driveupload
+*.json
+src/secret.py
+
+#audio files
+audio/
+*.m4a
+*.wav
+*.mp3
+
+#text files
+/output
+*.txt
+!requirements.txt
+*.csv
+
+#misc
+__pycache__/
+.venv/
+*.ipynb

@@ -1,0 +1,15 @@
+services:
+  whisper:
+    build:
+      context: .
+    volumes:
+      - .:/app
+    working_dir: /app/src
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
