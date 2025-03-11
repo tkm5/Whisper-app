@@ -1,15 +1,14 @@
 services:
   whisper:
-    build:
-      context: .
+    build: ./src
+    command: python main.py
     volumes:
-      - .:/app
-    working_dir: /app/src
+      - ./src:/app
 
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [ gpu ]
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [ gpu ]

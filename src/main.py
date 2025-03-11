@@ -14,6 +14,7 @@ if __name__ == '__main__':
         lang=settings.LANG,
         use_api=False,
     )
+    os.makedirs(settings.OUTPUT_DIR, exist_ok=True)
     minutes_dict = transcriber.audio_to_text(audio_path)
     transcriber.write_to_text(f'{settings.OUTPUT_DIR}/{OUTPUT_FILE_NAME}.txt', minutes_dict)
     # transcriber.export_csv(f'./output/{OUTPUT_FILE_NAME}.csv', minutes_dict)

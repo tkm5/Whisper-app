@@ -1,5 +1,13 @@
 # Whisper-app
 
+- [Overview](#overview)
+- [Quick Start](#quick-start)
+  - [Common](#common)
+  - [Local environment](#local-environment)
+  - [Docker environment](#docker-environment)
+- [To receive completion notifications on Discord](#to-receive-completion-notifications-on-discord)
+
+
 ## Overview
 
 This application uses OpenAI's Whisper-API or a local model to output a meeting minutes．
@@ -22,6 +30,8 @@ The minutes are output in the following two formats．
     \[00:00:08] --> \[00:00:15] &#124; Let's discuss the model．  
     \[00:00:15] --> \[00:00:33] &#124; Large model will be the best system．  
     \[00:00:33] --> \[00:00:43] &#124; But the capacity is large．  
+
+<div class="page"/>
 
 ## Quick Start
 

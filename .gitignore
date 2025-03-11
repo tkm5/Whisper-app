@@ -1,7 +1,5 @@
 #setting files
-.DS_Store
-.idea/
-.tmp.driveupload
+
 *.json
 src/secret.py
 
