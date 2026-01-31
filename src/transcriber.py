@@ -27,6 +27,8 @@ class TranscriptSegment(TypedDict):
 class AudioTranscriber:
     """音声ファイルをテキストに変換するクラス．"""
 
+    NIM_CHUNK_DURATION = 25
+
     def __init__(
         self,
         model_name: str = settings.MODEL,
@@ -67,6 +69,55 @@ class AudioTranscriber:
             return resp.status_code == 200
         except requests.RequestException:
             return False
+
+    def _get_audio_duration(self, audio_path: Path) -> float:
+        """音声ファイルの長さを取得する（秒）．"""
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(audio_path),
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            return float(result.stdout.strip())
+        except (subprocess.CalledProcessError, ValueError):
+            return 0.0
+
+    def _split_audio(self, audio_path: Path, chunk_duration: int = 25) -> list[Path]:
+        """音声ファイルをチャンクに分割する．"""
+        duration = self._get_audio_duration(audio_path)
+        if duration <= chunk_duration:
+            return [audio_path]
+
+        temp_dir = Path(tempfile.gettempdir())
+        chunks = []
+        chunk_idx = 0
+        start = 0.0
+
+        while start < duration:
+            chunk_path = temp_dir / f"{audio_path.stem}_chunk{chunk_idx:04d}.wav"
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", str(audio_path),
+                "-ss", str(start),
+                "-t", str(chunk_duration),
+                "-ar", "16000",
+                "-ac", "1",
+                str(chunk_path),
+            ]
+            try:
+                subprocess.run(cmd, capture_output=True, check=True)
+                chunks.append(chunk_path)
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Failed to split audio: {e}")
+                break
+
+            start += chunk_duration
+            chunk_idx += 1
+
+        logger.info(f"Split audio into {len(chunks)} chunks")
+        return chunks
 
     def _convert_to_wav(self, audio_path: Path) -> Path:
         """音声ファイルをWAV形式に変換する．"""
@@ -112,35 +163,52 @@ class AudioTranscriber:
         return self._transcribe_with_local_model(audio_path)
 
     def _transcribe_with_nim(self, audio_path: Path) -> list[TranscriptSegment]:
-        """NIM APIを使用した文字起こし．"""
+        """NIM APIを使用した文字起こし（長いファイルは分割処理）．"""
         logger.info(f"Transcribing with NIM API: {audio_path}")
 
         converted_path = self._convert_to_wav(audio_path)
         cleanup_converted = converted_path != audio_path
 
         try:
-            url = f"{self.nim_endpoint}/v1/audio/transcriptions"
+            chunks = self._split_audio(converted_path, self.NIM_CHUNK_DURATION)
+            cleanup_chunks = len(chunks) > 1
 
-            with open(converted_path, "rb") as audio_file:
-                files = {"file": (converted_path.name, audio_file, "audio/wav")}
-                data = {"language": self.lang, "response_format": "json"}
-                if self.prompt:
-                    data["prompt"] = self.prompt
+            all_text = []
+            for i, chunk_path in enumerate(chunks):
+                logger.info(f"Processing chunk {i + 1}/{len(chunks)}")
+                text = self._transcribe_chunk_with_nim(chunk_path)
+                all_text.append(text)
 
-                response = requests.post(url, files=files, data=data, timeout=600)
-                response.raise_for_status()
-                result = response.json()
+                if cleanup_chunks and chunk_path != converted_path:
+                    chunk_path.unlink(missing_ok=True)
 
+            combined_text = " ".join(all_text)
             return [
                 TranscriptSegment(
                     start_time="00:00:00",
                     end_time="--:--:--",
-                    text=result.get("text", ""),
+                    text=combined_text,
                 )
             ]
         finally:
             if cleanup_converted and converted_path.exists():
                 converted_path.unlink()
+
+    def _transcribe_chunk_with_nim(self, audio_path: Path) -> str:
+        """1つのチャンクをNIM APIで文字起こし．"""
+        url = f"{self.nim_endpoint}/v1/audio/transcriptions"
+
+        with open(audio_path, "rb") as audio_file:
+            files = {"file": (audio_path.name, audio_file, "audio/wav")}
+            data = {"language": self.lang, "response_format": "json"}
+            if self.prompt:
+                data["prompt"] = self.prompt
+
+            response = requests.post(url, files=files, data=data, timeout=600)
+            response.raise_for_status()
+            result = response.json()
+
+        return result.get("text", "")
 
     def _transcribe_with_openai_api(self, audio_path: Path) -> list[TranscriptSegment]:
         """OpenAI APIを使用した文字起こし．"""
