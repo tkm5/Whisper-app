@@ -1,17 +1,22 @@
 """音声文字起こしモジュール．"""
+import logging
 import os
 from pathlib import Path
 from typing import TypedDict
 
+import requests
 import torch
 import whisper
 from openai import OpenAI
 
 import settings
 
+logger = logging.getLogger(__name__)
+
 
 class TranscriptSegment(TypedDict):
     """文字起こしセグメントの型定義．"""
+
     start_time: str
     end_time: str
     text: str
@@ -25,6 +30,7 @@ class AudioTranscriber:
         model_name: str = settings.MODEL,
         lang: str = settings.LANG,
         use_api: bool = False,
+        use_nim: bool = False,
         device: str | None = None,
     ) -> None:
         """AudioTranscriberを初期化する．
@@ -33,21 +39,49 @@ class AudioTranscriber:
             model_name: 使用するWhisperモデル名．
             lang: 文字起こしの言語．
             use_api: OpenAI APIを使用するかどうか．
+            use_nim: NIM APIを強制使用するかどうか．
             device: モデルをロードするデバイス．
         """
         self.prompt = settings.PROMPT
         self.lang = lang
         self.use_api = use_api
+        self.use_nim = use_nim
+        self.nim_endpoint = os.getenv("NIM_ENDPOINT", "http://localhost:9000")
+        self.model = None
 
         api_key = os.getenv("OPENAI_API_KEY")
         if use_api and not api_key:
-            raise ValueError("OPENAI_API_KEY environment variable is required when use_api=True")
+            raise ValueError(
+                "OPENAI_API_KEY environment variable is required when use_api=True"
+            )
         self.client = OpenAI(api_key=api_key) if api_key else None
 
-        if device is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+        # NIMモード判定（自動検出）
+        if not self.use_nim and self._is_nim_available():
+            logger.info("NIM endpoint detected, using NIM API")
+            self.use_nim = True
 
-        self.model = whisper.load_model(model_name, device=device)
+        # NIM使用時はローカルモデルをロードしない
+        if not self.use_nim and not self.use_api:
+            if device is None:
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+            logger.info(f"Loading local Whisper model on {device}")
+            self.model = whisper.load_model(model_name, device=device)
+
+    def _is_nim_available(self) -> bool:
+        """NIMエンドポイントが利用可能か確認する．
+
+        Returns:
+            NIMエンドポイントが利用可能な場合True．
+        """
+        try:
+            resp = requests.get(
+                f"{self.nim_endpoint}/v1/health/ready",
+                timeout=5,
+            )
+            return resp.status_code == 200
+        except requests.RequestException:
+            return False
 
     @staticmethod
     def _format_time(seconds: float) -> str:
@@ -68,48 +102,131 @@ class AudioTranscriber:
         """
         audio_path = Path(audio_path)
 
+        if self.use_nim:
+            return self._transcribe_with_nim(audio_path)
+
         if self.use_api:
-            if not self.client:
-                raise ValueError("OpenAI client not initialized")
-            with open(audio_path, "rb") as audio_file:
-                result = self.client.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=audio_file,
-                    response_format="verbose_json",
-                    language=self.lang,
-                    prompt=self.prompt,
-                )
-            segments = result.segments
-            return [
-                TranscriptSegment(
-                    start_time=self._format_time(seg.start),
-                    end_time=self._format_time(seg.end),
-                    text=seg.text,
-                )
-                for seg in segments
-            ]
-        else:
-            result = self.model.transcribe(
-                audio=str(audio_path),
-                verbose=True,
+            return self._transcribe_with_openai_api(audio_path)
+
+        return self._transcribe_with_local_model(audio_path)
+
+    def _transcribe_with_nim(self, audio_path: Path) -> list[TranscriptSegment]:
+        """NIM APIを使用した文字起こし．
+
+        Args:
+            audio_path: 音声ファイルのパス．
+
+        Returns:
+            文字起こし結果のセグメントリスト．
+        """
+        logger.info(f"Transcribing with NIM API: {audio_path}")
+
+        url = f"{self.nim_endpoint}/v1/audio/transcriptions"
+
+        with open(audio_path, "rb") as audio_file:
+            files = {"file": (audio_path.name, audio_file, "audio/mpeg")}
+            data = {
+                "model": "whisper-large-v3",
+                "language": self.lang,
+                "response_format": "verbose_json",
+            }
+            if self.prompt:
+                data["prompt"] = self.prompt
+
+            response = requests.post(url, files=files, data=data, timeout=600)
+            response.raise_for_status()
+            result = response.json()
+
+        segments = result.get("segments", [])
+        return [
+            TranscriptSegment(
+                start_time=self._format_time(seg["start"]),
+                end_time=self._format_time(seg["end"]),
+                text=seg["text"],
+            )
+            for seg in segments
+        ]
+
+    def _transcribe_with_openai_api(self, audio_path: Path) -> list[TranscriptSegment]:
+        """OpenAI APIを使用した文字起こし．
+
+        Args:
+            audio_path: 音声ファイルのパス．
+
+        Returns:
+            文字起こし結果のセグメントリスト．
+        """
+        if not self.client:
+            raise ValueError("OpenAI client not initialized")
+
+        logger.info(f"Transcribing with OpenAI API: {audio_path}")
+
+        with open(audio_path, "rb") as audio_file:
+            result = self.client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                response_format="verbose_json",
                 language=self.lang,
                 prompt=self.prompt,
             )
-            return [
-                TranscriptSegment(
-                    start_time=self._format_time(seg["start"]),
-                    end_time=self._format_time(seg["end"]),
-                    text=seg["text"],
-                )
-                for seg in result["segments"]
-            ]
+
+        segments = result.segments
+        return [
+            TranscriptSegment(
+                start_time=self._format_time(seg.start),
+                end_time=self._format_time(seg.end),
+                text=seg.text,
+            )
+            for seg in segments
+        ]
+
+    def _transcribe_with_local_model(
+        self, audio_path: Path
+    ) -> list[TranscriptSegment]:
+        """ローカルWhisperモデルを使用した文字起こし．
+
+        Args:
+            audio_path: 音声ファイルのパス．
+
+        Returns:
+            文字起こし結果のセグメントリスト．
+        """
+        if not self.model:
+            raise ValueError("Local Whisper model not loaded")
+
+        logger.info(f"Transcribing with local model: {audio_path}")
+
+        result = self.model.transcribe(
+            audio=str(audio_path),
+            verbose=True,
+            language=self.lang,
+            prompt=self.prompt,
+        )
+
+        return [
+            TranscriptSegment(
+                start_time=self._format_time(seg["start"]),
+                end_time=self._format_time(seg["end"]),
+                text=seg["text"],
+            )
+            for seg in result["segments"]
+        ]
 
     @staticmethod
-    def write_to_text(output_path: str | Path, segments: list[TranscriptSegment]) -> None:
-        """文字起こし結果をテキストファイルに書き込む．"""
+    def write_to_text(
+        output_path: str | Path, segments: list[TranscriptSegment]
+    ) -> None:
+        """文字起こし結果をテキストファイルに書き込む．
+
+        Args:
+            output_path: 出力ファイルのパス．
+            segments: 文字起こしセグメントのリスト．
+        """
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         with open(output_path, "w", encoding="utf-8") as f:
             for seg in segments:
-                f.write(f"[{seg['start_time']}] --> [{seg['end_time']}] | {seg['text']}\n")
+                f.write(
+                    f"[{seg['start_time']}] --> [{seg['end_time']}] | {seg['text']}\n"
+                )

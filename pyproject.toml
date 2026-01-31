@@ -1,0 +1,17 @@
+[project]
+name = "whisper-app"
+version = "1.0.0"
+description = "Audio transcription app using NVIDIA NIM Whisper"
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=1.0.0",
+    "openai-whisper>=20231117",
+    "torch>=2.0.0",
+    "pandas>=2.0.0",
+    "discordwebhook>=1.0.0",
+    "nvidia-riva-client>=2.14.0",
+    "requests>=2.28.0",
+]
+
+[tool.uv]
+dev-dependencies = []

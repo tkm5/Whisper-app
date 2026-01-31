@@ -1,5 +1,0 @@
-openai
-openai-whisper
-setuptools-rust
-pandas
-discordwebhook

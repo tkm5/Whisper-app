@@ -28,6 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default=settings.MODEL, help="Whisperモデル名")
     parser.add_argument("--lang", default=settings.LANG, help="言語コード")
     parser.add_argument("--use-api", action="store_true", help="OpenAI APIを使用")
+    parser.add_argument("--nim", action="store_true", help="NIM APIを強制使用")
     parser.add_argument("--no-notify", action="store_true", help="Discord通知を無効化")
     return parser.parse_args()
 
@@ -55,6 +56,7 @@ def main() -> int:
             model_name=args.model,
             lang=args.lang,
             use_api=args.use_api,
+            use_nim=args.nim,
         )
         segments = transcriber.transcribe(audio_path)
         transcriber.write_to_text(output_path, segments)
