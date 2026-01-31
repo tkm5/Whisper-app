@@ -1,0 +1,20 @@
+services:
+  whisper:
+    build:
+      context: .
+    volumes:
+      - .:/app
+    working_dir: /app/src
+    environment:
+      - AUDIO_FILE=${AUDIO_FILE:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
+      - WHISPER_MODEL=${WHISPER_MODEL:-large}
+      - WHISPER_LANG=${WHISPER_LANG:-ja}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

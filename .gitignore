@@ -1,0 +1,42 @@
+# Environment and secrets
+.env
+.env.local
+*.env
+
+# Setting files
+.DS_Store
+.idea/
+.tmp.driveupload
+*.json
+
+# Audio files
+audio/
+audio_files/
+*.m4a
+*.wav
+*.mp3
+
+# Output files
+output/
+*.txt
+!requirements.txt
+*.csv
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+
+# Jupyter
+*.ipynb
+.ipynb_checkpoints/
+
+# Environment variables
+.env
+.env.local
+
+# Secrets (should never be committed)
+src/secret.py
