@@ -285,6 +285,10 @@ class AudioTranscriber:
 
         with open(output_path, "w", encoding="utf-8") as f:
             for seg in segments:
-                f.write(
-                    f"[{seg['start_time']}] --> [{seg['end_time']}] | {seg['text']}\n"
-                )
+                # タイムスタンプがない場合（NIM API）はテキストのみ出力
+                if seg["end_time"] == "--:--:--":
+                    f.write(f"{seg['text']}\n")
+                else:
+                    f.write(
+                        f"[{seg['start_time']}] --> [{seg['end_time']}] | {seg['text']}\n"
+                    )
