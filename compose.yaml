@@ -2,7 +2,6 @@ services:
   # NIM Whisperコンテナ（GPU環境のみ）
   nim-whisper:
     image: nvcr.io/nim/nvidia/whisper-large-v3:latest
-    runtime: nvidia
     shm_size: 8gb
     environment:
       - NGC_API_KEY=${NGC_API_KEY}
