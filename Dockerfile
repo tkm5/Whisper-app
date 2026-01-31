@@ -27,4 +27,5 @@ COPY src/ ./src/
 
 WORKDIR /app/src
 
-CMD ["uv", "run", "python", "main.py"]
+# デフォルトはWebサーバー起動
+CMD ["uv", "run", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]

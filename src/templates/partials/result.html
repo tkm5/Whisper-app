@@ -1,0 +1,17 @@
+<div class="bg-zinc-900 rounded-lg p-6">
+    <div class="flex justify-between items-center mb-4">
+        <p class="text-sm text-muted">{{ filename }}</p>
+        <div class="flex gap-2">
+            <button id="copy-btn"
+                    class="px-3 py-1 text-sm border border-border rounded hover:bg-zinc-800 transition-colors">
+                コピー
+            </button>
+            <a href="/download/{{ job_id }}" download
+               class="px-3 py-1 text-sm border border-border rounded hover:bg-zinc-800 transition-colors inline-block">
+                ダウンロード
+            </a>
+        </div>
+    </div>
+
+    <pre id="transcript" class="whitespace-pre-wrap text-sm leading-relaxed max-h-[60vh] overflow-y-auto bg-zinc-950 p-4 rounded">{{ text }}</pre>
+</div>

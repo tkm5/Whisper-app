@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="ja" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Whisper Web</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        background: '#0a0a0a',
+                        foreground: '#fafafa',
+                        muted: '#71717a',
+                        border: '#27272a',
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-background text-foreground min-h-screen">
+    <div class="max-w-5xl mx-auto px-6 py-12">
+        <h1 class="text-2xl font-bold mb-8">Whisper Web</h1>
+        <form id="upload-form" hx-post="/upload" hx-encoding="multipart/form-data" hx-target="#result" hx-swap="innerHTML">
+            <div id="dropzone" class="border-2 border-dashed border-border rounded-lg p-12 text-center hover:border-muted transition-colors cursor-pointer">
+                <p id="dropzone-text" class="text-muted">音声ファイルをドラッグ＆ドロップ</p>
+                <p id="dropzone-subtext" class="text-xs text-muted mt-2">または クリックして選択</p>
+                <input type="file" name="file" accept="audio/*,.m4a,.mp4,.webm" class="hidden" id="file-input" />
+            </div>
+            <div id="upload-indicator" class="hidden items-center justify-center gap-3 mt-4 p-4 bg-zinc-900 rounded-lg text-center">
+                <div class="animate-spin h-5 w-5 border-2 border-foreground border-t-transparent rounded-full"></div>
+                <p id="indicator-text">アップロード中...</p>
+            </div>
+        </form>
+        <div id="result" class="mt-8"></div>
+    </div>
+    <script>
+        var dropzone = document.getElementById('dropzone');
+        var fileInput = document.getElementById('file-input');
+        var form = document.getElementById('upload-form');
+        var indicator = document.getElementById('upload-indicator');
+        var indicatorText = document.getElementById('indicator-text');
+        var dropzoneText = document.getElementById('dropzone-text');
+        var dropzoneSubtext = document.getElementById('dropzone-subtext');
+
+        function showUploading(filename) {
+            indicator.classList.remove('hidden');
+            indicator.classList.add('flex');
+            indicatorText.textContent = filename + ' をアップロード中...';
+            dropzoneText.textContent = filename;
+            dropzoneSubtext.textContent = '';
+        }
+
+        function resetDropzone() {
+            indicator.classList.add('hidden');
+            indicator.classList.remove('flex');
+            dropzoneText.textContent = '音声ファイルをドラッグ＆ドロップ';
+            dropzoneSubtext.textContent = 'または クリックして選択';
+        }
+
+        // イベント委譲でコピーボタンを処理
+        document.addEventListener('click', function(e) {
+            if (e.target && e.target.id === 'copy-btn') {
+                var transcript = document.getElementById('transcript');
+                if (!transcript) return;
+                
+                var text = transcript.innerText || transcript.textContent;
+                var btn = e.target;
+                
+                var textarea = document.createElement('textarea');
+                textarea.value = text;
+                textarea.style.position = 'fixed';
+                textarea.style.left = '-9999px';
+                textarea.style.top = '0';
+                document.body.appendChild(textarea);
+                textarea.focus();
+                textarea.select();
+                
+                try {
+                    document.execCommand('copy');
+                    btn.textContent = 'コピー済み';
+                    setTimeout(function() { btn.textContent = 'コピー'; }, 2000);
+                } catch (err) {
+                    console.error('Copy failed:', err);
+                }
+                
+                document.body.removeChild(textarea);
+            }
+        });
+
+        dropzone.addEventListener('click', function() { fileInput.click(); });
+        dropzone.addEventListener('dragover', function(e) { e.preventDefault(); dropzone.classList.add('border-foreground'); });
+        dropzone.addEventListener('dragleave', function(e) { e.preventDefault(); dropzone.classList.remove('border-foreground'); });
+        dropzone.addEventListener('drop', function(e) {
+            e.preventDefault();
+            dropzone.classList.remove('border-foreground');
+            var files = e.dataTransfer.files;
+            if (files.length > 0) {
+                showUploading(files[0].name);
+                var dataTransfer = new DataTransfer();
+                dataTransfer.items.add(files[0]);
+                fileInput.files = dataTransfer.files;
+                htmx.trigger(form, 'submit');
+            }
+        });
+        fileInput.addEventListener('change', function() {
+            if (fileInput.files.length > 0) {
+                showUploading(fileInput.files[0].name);
+                htmx.trigger(form, 'submit');
+            }
+        });
+        document.body.addEventListener('htmx:afterSwap', function(e) {
+            if (e.detail.target.id === 'result') { resetDropzone(); }
+        });
+    </script>
+</body>
+</html>

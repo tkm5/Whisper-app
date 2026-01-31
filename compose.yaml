@@ -1,5 +1,4 @@
 services:
-  # NIM Whisperコンテナ（GPU環境のみ）
   nim-whisper:
     image: nvcr.io/nim/nvidia/whisper-large-v3:latest
     shm_size: 8gb
@@ -11,6 +10,9 @@ services:
     ports:
       - "9000:9000"
       - "50051:50051"
+    volumes:
+      - /mnt/ino-raid4/takumig/nim-cache:/opt/nim/.cache
+      - /mnt/ino-raid4/takumig/nim-data:/data
     deploy:
       resources:
         reservations:
@@ -27,14 +29,34 @@ services:
       retries: 20
       start_period: 300s
 
-  # whisper-appコンテナ
-  whisper:
+  whisper-web:
+    build:
+      context: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./audio_files:/app/audio_files
+      - ./output:/app/output
+      - ./src/templates:/app/src/templates
+      - ./src/transcriber.py:/app/src/transcriber.py
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
+      - WHISPER_MODEL=${WHISPER_MODEL:-large}
+      - WHISPER_LANG=${WHISPER_LANG:-ja}
+      - NIM_ENDPOINT=http://nim-whisper:9000
+    command: ["uv", "run", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      nim-whisper:
+        condition: service_healthy
+        required: false
+
+  whisper-cli:
     build:
       context: .
     volumes:
       - ./audio_files:/app/audio_files
       - ./output:/app/output
-    working_dir: /app/src
     environment:
       - AUDIO_FILE=${AUDIO_FILE:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -42,7 +64,10 @@ services:
       - WHISPER_MODEL=${WHISPER_MODEL:-large}
       - WHISPER_LANG=${WHISPER_LANG:-ja}
       - NIM_ENDPOINT=http://nim-whisper:9000
+    command: ["uv", "run", "python", "main.py"]
     depends_on:
       nim-whisper:
         condition: service_healthy
         required: false
+    profiles:
+      - cli

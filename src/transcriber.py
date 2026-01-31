@@ -29,6 +29,8 @@ class AudioTranscriber:
 
     # NIM APIがサポートする音声形式
     NIM_SUPPORTED_FORMATS = {".wav", ".mp3", ".flac", ".ogg"}
+    # NIM用のチャンク長（秒）
+    NIM_CHUNK_DURATION = 25
 
     def __init__(
         self,
@@ -38,15 +40,7 @@ class AudioTranscriber:
         use_nim: bool = False,
         device: str | None = None,
     ) -> None:
-        """AudioTranscriberを初期化する．
-
-        Args:
-            model_name: 使用するWhisperモデル名．
-            lang: 文字起こしの言語．
-            use_api: OpenAI APIを使用するかどうか．
-            use_nim: NIM APIを強制使用するかどうか．
-            device: モデルをロードするデバイス．
-        """
+        """AudioTranscriberを初期化する．"""
         self.prompt = settings.PROMPT
         self.lang = lang
         self.use_api = use_api
@@ -74,11 +68,7 @@ class AudioTranscriber:
             self.model = whisper.load_model(model_name, device=device)
 
     def _is_nim_available(self) -> bool:
-        """NIMエンドポイントが利用可能か確認する．
-
-        Returns:
-            NIMエンドポイントが利用可能な場合True．
-        """
+        """NIMエンドポイントが利用可能か確認する．"""
         try:
             resp = requests.get(
                 f"{self.nim_endpoint}/v1/health/ready",
@@ -88,43 +78,75 @@ class AudioTranscriber:
         except requests.RequestException:
             return False
 
+    def _get_audio_duration(self, audio_path: Path) -> float:
+        """音声ファイルの長さを取得する（秒）．"""
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(audio_path)
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            return float(result.stdout.strip())
+        except (subprocess.CalledProcessError, ValueError):
+            return 0.0
+
+    def _split_audio(self, audio_path: Path, chunk_duration: int = 25) -> list[Path]:
+        """音声ファイルをチャンクに分割する．"""
+        duration = self._get_audio_duration(audio_path)
+        if duration <= chunk_duration:
+            return [audio_path]
+
+        temp_dir = Path(tempfile.gettempdir())
+        chunks = []
+        start = 0
+        chunk_idx = 0
+
+        while start < duration:
+            chunk_path = temp_dir / f"{audio_path.stem}_chunk{chunk_idx:04d}.wav"
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", str(audio_path),
+                "-ss", str(start),
+                "-t", str(chunk_duration),
+                "-ar", "16000",
+                "-ac", "1",
+                str(chunk_path)
+            ]
+            try:
+                subprocess.run(cmd, capture_output=True, check=True)
+                chunks.append(chunk_path)
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Failed to split audio: {e}")
+                break
+            
+            start += chunk_duration
+            chunk_idx += 1
+
+        logger.info(f"Split audio into {len(chunks)} chunks")
+        return chunks
+
     def _convert_to_wav(self, audio_path: Path) -> Path:
-        """音声ファイルをWAV形式に変換する．
-
-        Args:
-            audio_path: 変換元の音声ファイルパス．
-
-        Returns:
-            変換後のWAVファイルパス．
-
-        Raises:
-            RuntimeError: ffmpegによる変換に失敗した場合．
-        """
-        if audio_path.suffix.lower() in self.NIM_SUPPORTED_FORMATS:
+        """音声ファイルをWAV形式に変換する．"""
+        if audio_path.suffix.lower() == ".wav":
             return audio_path
 
         logger.info(f"Converting {audio_path.suffix} to WAV format")
 
-        # 一時ファイルとして変換後のWAVを作成
         temp_dir = Path(tempfile.gettempdir())
         wav_path = temp_dir / f"{audio_path.stem}_converted.wav"
 
         cmd = [
-            "ffmpeg",
+            "ffmpeg", "-y",
             "-i", str(audio_path),
             "-ar", "16000",
             "-ac", "1",
-            "-y",
             str(wav_path),
         ]
 
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
             logger.info(f"Converted to: {wav_path}")
             return wav_path
         except subprocess.CalledProcessError as e:
@@ -139,14 +161,7 @@ class AudioTranscriber:
         return f"{hours:02}:{minutes:02}:{secs:02}"
 
     def transcribe(self, audio_path: str | Path) -> list[TranscriptSegment]:
-        """音声ファイルを文字起こしする．
-
-        Args:
-            audio_path: 音声ファイルのパス．
-
-        Returns:
-            文字起こし結果のセグメントリスト．
-        """
+        """音声ファイルを文字起こしする．"""
         audio_path = Path(audio_path)
 
         if self.use_nim:
@@ -158,62 +173,61 @@ class AudioTranscriber:
         return self._transcribe_with_local_model(audio_path)
 
     def _transcribe_with_nim(self, audio_path: Path) -> list[TranscriptSegment]:
-        """NIM APIを使用した文字起こし．
-
-        NIM APIはセグメント情報（タイムスタンプ）を返さないため，
-        全体を1つのセグメントとして返す．
-
-        Args:
-            audio_path: 音声ファイルのパス．
-
-        Returns:
-            文字起こし結果のセグメントリスト．
-        """
+        """NIM APIを使用した文字起こし（長いファイルは分割処理）．"""
         logger.info(f"Transcribing with NIM API: {audio_path}")
 
-        # 必要に応じてWAV形式に変換
+        # WAV形式に変換
         converted_path = self._convert_to_wav(audio_path)
         cleanup_converted = converted_path != audio_path
 
         try:
-            url = f"{self.nim_endpoint}/v1/audio/transcriptions"
+            # 長いファイルは分割
+            chunks = self._split_audio(converted_path, self.NIM_CHUNK_DURATION)
+            cleanup_chunks = len(chunks) > 1
 
-            with open(converted_path, "rb") as audio_file:
-                files = {"file": (converted_path.name, audio_file, "audio/wav")}
-                data = {
-                    "language": self.lang,
-                    "response_format": "json",
-                }
-                if self.prompt:
-                    data["prompt"] = self.prompt
+            all_text = []
+            for i, chunk_path in enumerate(chunks):
+                logger.info(f"Processing chunk {i+1}/{len(chunks)}")
+                text = self._transcribe_chunk_with_nim(chunk_path)
+                all_text.append(text)
 
-                response = requests.post(url, files=files, data=data, timeout=600)
-                response.raise_for_status()
-                result = response.json()
+                # 分割したチャンクを削除
+                if cleanup_chunks and chunk_path != converted_path:
+                    chunk_path.unlink(missing_ok=True)
 
-            # NIM APIはセグメント情報を返さないため，全体を1つのセグメントとして扱う
-            text = result.get("text", "")
+            combined_text = " ".join(all_text)
             return [
                 TranscriptSegment(
                     start_time="00:00:00",
                     end_time="--:--:--",
-                    text=text,
+                    text=combined_text,
                 )
             ]
         finally:
-            # 変換した一時ファイルを削除
             if cleanup_converted and converted_path.exists():
                 converted_path.unlink()
 
+    def _transcribe_chunk_with_nim(self, audio_path: Path) -> str:
+        """1つのチャンクをNIM APIで文字起こし．"""
+        url = f"{self.nim_endpoint}/v1/audio/transcriptions"
+
+        with open(audio_path, "rb") as audio_file:
+            files = {"file": (audio_path.name, audio_file, "audio/wav")}
+            data = {
+                "language": self.lang,
+                "response_format": "json",
+            }
+            if self.prompt:
+                data["prompt"] = self.prompt
+
+            response = requests.post(url, files=files, data=data, timeout=600)
+            response.raise_for_status()
+            result = response.json()
+
+        return result.get("text", "")
+
     def _transcribe_with_openai_api(self, audio_path: Path) -> list[TranscriptSegment]:
-        """OpenAI APIを使用した文字起こし．
-
-        Args:
-            audio_path: 音声ファイルのパス．
-
-        Returns:
-            文字起こし結果のセグメントリスト．
-        """
+        """OpenAI APIを使用した文字起こし．"""
         if not self.client:
             raise ValueError("OpenAI client not initialized")
 
@@ -241,14 +255,7 @@ class AudioTranscriber:
     def _transcribe_with_local_model(
         self, audio_path: Path
     ) -> list[TranscriptSegment]:
-        """ローカルWhisperモデルを使用した文字起こし．
-
-        Args:
-            audio_path: 音声ファイルのパス．
-
-        Returns:
-            文字起こし結果のセグメントリスト．
-        """
+        """ローカルWhisperモデルを使用した文字起こし．"""
         if not self.model:
             raise ValueError("Local Whisper model not loaded")
 
@@ -274,18 +281,12 @@ class AudioTranscriber:
     def write_to_text(
         output_path: str | Path, segments: list[TranscriptSegment]
     ) -> None:
-        """文字起こし結果をテキストファイルに書き込む．
-
-        Args:
-            output_path: 出力ファイルのパス．
-            segments: 文字起こしセグメントのリスト．
-        """
+        """文字起こし結果をテキストファイルに書き込む．"""
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         with open(output_path, "w", encoding="utf-8") as f:
             for seg in segments:
-                # タイムスタンプがない場合（NIM API）はテキストのみ出力
                 if seg["end_time"] == "--:--:--":
                     f.write(f"{seg['text']}\n")
                 else:
