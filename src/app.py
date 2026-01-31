@@ -21,18 +21,33 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Whisper Web")
 
-# テンプレートとスタティックファイルの設定
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 static_path = Path(__file__).parent / "static"
 if static_path.exists():
     app.mount("/static", StaticFiles(directory=static_path), name="static")
 
-# ジョブ管理（インメモリ）
 job_manager = JobManager()
 
-# 一時ファイル保存ディレクトリ
 UPLOAD_DIR = Path(tempfile.gettempdir()) / "whisper-uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
+
+
+def format_segments_to_text(segments: list[dict]) -> str:
+    """セグメントリストをテキスト形式に変換する．
+
+    Args:
+        segments: 文字起こしセグメントのリスト．
+
+    Returns:
+        フォーマットされたテキスト．
+    """
+    lines = []
+    for seg in segments:
+        if seg["end_time"] == "--:--:--":
+            lines.append(seg["text"])
+        else:
+            lines.append(f"[{seg[start_time]}] --> [{seg[end_time]}] | {seg[text]}")
+    return "\n".join(lines) + "\n" if lines else ""
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -52,25 +67,20 @@ async def upload(request: Request, file: UploadFile) -> HTMLResponse:
     Returns:
         進捗表示のHTMLパーシャル．
     """
-    job_id = job_manager.create_job(file.filename or "unknown")
+    filename = file.filename or "unknown"
+    job_id = job_manager.create_job(filename)
 
-    # ファイルを保存
-    file_path = UPLOAD_DIR / f"{job_id}_{file.filename}"
+    file_path = UPLOAD_DIR / f"{job_id}_{filename}"
     async with aiofiles.open(file_path, "wb") as f:
         content = await file.read()
         await f.write(content)
 
-    job_manager.set_file_path(job_id, str(file_path))
-    job_manager.update_status(job_id, JobStatus.PROCESSING)
+    job_manager.update_job(job_id, file_path=str(file_path), status=JobStatus.PROCESSING)
 
     return templates.TemplateResponse(
         request,
         "partials/progress.html",
-        {
-            "job_id": job_id,
-            "filename": file.filename,
-            "status": "文字起こし中...",
-        },
+        {"job_id": job_id, "filename": filename, "status": "文字起こし中..."},
     )
 
 
@@ -85,9 +95,8 @@ async def transcribe(request: Request, job_id: str) -> HTMLResponse:
     Returns:
         結果表示のHTMLパーシャル．
     """
-    try:
-        job = job_manager.get_job(job_id)
-    except KeyError:
+    job = job_manager.get_job(job_id)
+    if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
 
     file_path = Path(job.get("file_path", ""))
@@ -95,50 +104,37 @@ async def transcribe(request: Request, job_id: str) -> HTMLResponse:
         raise HTTPException(status_code=404, detail="File not found")
 
     try:
-        # 文字起こし実行
         transcriber = AudioTranscriber(
             model_name=settings.MODEL,
             lang=settings.LANG,
             use_nim=True,
         )
         segments = transcriber.transcribe(file_path)
+        result_text = format_segments_to_text(segments)
 
-        # 結果をテキストに変換
-        result_text = ""
-        for seg in segments:
-            if seg["end_time"] == "--:--:--":
-                result_text += f"{seg['text']}\n"
-            else:
-                result_text += f"[{seg['start_time']}] --> [{seg['end_time']}] | {seg['text']}\n"
-
-        # 結果ファイルを保存
         output_path = settings.OUTPUT_DIR / f"{job_id}.txt"
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(result_text)
+        output_path.write_text(result_text, encoding="utf-8")
 
-        job_manager.set_result(job_id, result_text, str(output_path))
+        job_manager.update_job(
+            job_id,
+            result_text=result_text,
+            result_path=str(output_path),
+            status=JobStatus.COMPLETED,
+        )
 
         return templates.TemplateResponse(
             request,
             "partials/result.html",
-            {
-                "job_id": job_id,
-                "filename": job["filename"],
-                "text": result_text,
-            },
+            {"job_id": job_id, "filename": job["filename"], "text": result_text},
         )
     except Exception as e:
         logger.error(f"Transcription failed: {e}")
-        job_manager.update_status(job_id, JobStatus.FAILED)
+        job_manager.update_job(job_id, status=JobStatus.FAILED)
         return templates.TemplateResponse(
             request,
             "partials/error.html",
-            {
-                "job_id": job_id,
-                "filename": job["filename"],
-                "error": str(e),
-            },
+            {"job_id": job_id, "filename": job["filename"], "error": str(e)},
         )
 
 
@@ -152,9 +148,8 @@ async def download(job_id: str) -> FileResponse:
     Returns:
         結果ファイル．
     """
-    try:
-        job = job_manager.get_job(job_id)
-    except KeyError:
+    job = job_manager.get_job(job_id)
+    if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
 
     result_path = job.get("result_path")
@@ -164,5 +159,5 @@ async def download(job_id: str) -> FileResponse:
     return FileResponse(
         result_path,
         media_type="text/plain",
-        filename=f"{Path(job['filename']).stem}.txt",
+        filename=f"{Path(job[filename]).stem}.txt",
     )

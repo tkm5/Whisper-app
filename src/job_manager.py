@@ -1,11 +1,12 @@
 """ジョブ管理モジュール．"""
+import uuid
 from enum import Enum
 from typing import TypedDict
-import uuid
 
 
 class JobStatus(Enum):
     """ジョブの状態を表す列挙型．"""
+
     PENDING = "pending"
     PROCESSING = "processing"
     COMPLETED = "completed"
@@ -14,6 +15,7 @@ class JobStatus(Enum):
 
 class Job(TypedDict, total=False):
     """ジョブ情報の型定義．"""
+
     id: str
     filename: str
     status: JobStatus
@@ -46,63 +48,50 @@ class JobManager:
         )
         return job_id
 
-    def get_job(self, job_id: str) -> Job:
+    def get_job(self, job_id: str) -> Job | None:
         """ジョブ情報を取得する．
 
         Args:
             job_id: ジョブID．
 
         Returns:
-            ジョブ情報．
-
-        Raises:
-            KeyError: ジョブが存在しない場合．
+            ジョブ情報．存在しない場合はNone．
         """
-        if job_id not in self._jobs:
-            raise KeyError(f"Job not found: {job_id}")
-        return self._jobs[job_id]
+        return self._jobs.get(job_id)
 
-    def update_status(self, job_id: str, status: JobStatus) -> None:
-        """ジョブのステータスを更新する．
+    def update_job(
+        self,
+        job_id: str,
+        *,
+        status: JobStatus | None = None,
+        file_path: str | None = None,
+        result_text: str | None = None,
+        result_path: str | None = None,
+    ) -> None:
+        """ジョブを更新する．
 
         Args:
             job_id: ジョブID．
             status: 新しいステータス．
-
-        Raises:
-            KeyError: ジョブが存在しない場合．
-        """
-        job = self.get_job(job_id)
-        self._jobs[job_id] = {**job, "status": status}
-
-    def set_file_path(self, job_id: str, file_path: str) -> None:
-        """ジョブにファイルパスを設定する．
-
-        Args:
-            job_id: ジョブID．
             file_path: 保存されたファイルのパス．
-
-        Raises:
-            KeyError: ジョブが存在しない場合．
-        """
-        job = self.get_job(job_id)
-        self._jobs[job_id] = {**job, "file_path": file_path}
-
-    def set_result(self, job_id: str, result_text: str, result_path: str) -> None:
-        """ジョブに結果を設定する．
-
-        Args:
-            job_id: ジョブID．
             result_text: 文字起こし結果テキスト．
             result_path: 結果ファイルのパス．
 
         Raises:
             KeyError: ジョブが存在しない場合．
         """
-        job = self.get_job(job_id)
-        self._jobs[job_id] = {
-            **job,
-            "result_text": result_text,
-            "result_path": result_path,
-            "status": JobStatus.COMPLETED,
-        }
+        job = self._jobs.get(job_id)
+        if job is None:
+            raise KeyError(f"Job not found: {job_id}")
+
+        updates: dict = {}
+        if status is not None:
+            updates["status"] = status
+        if file_path is not None:
+            updates["file_path"] = file_path
+        if result_text is not None:
+            updates["result_text"] = result_text
+        if result_path is not None:
+            updates["result_path"] = result_path
+
+        self._jobs[job_id] = {**job, **updates}
