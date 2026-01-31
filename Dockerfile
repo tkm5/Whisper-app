@@ -27,4 +27,4 @@ COPY src/ ./src/
 
 WORKDIR /app/src
 
-CMD ["python", "main.py"]
+CMD ["uv", "run", "python", "main.py"]
